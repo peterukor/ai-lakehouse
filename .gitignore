@@ -1,0 +1,23 @@
+# secrets
+.env
+
+# RustFS data + logs (the actual object storage, don't commit the data itself)
+rustfs-data/
+rustfs-logs/
+
+# local staging area for the HF round-trip
+local-store/*
+!local-store/.gitkeep
+
+# DuckLake catalog file (this is your metadata database -- regenerable via rebuild.sh,
+# and can grow large / churn a lot as you take snapshots, so keep it out of git)
+*.ducklake
+*.ducklake.wal
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
