@@ -71,10 +71,30 @@ python3 notebooks/40_fragment_query_demo.py   # COCO metadata query + selective 
 python3 notebooks/50_versioning_demo.py       # time travel, snapshot comparison, rollback
 ```
 
+To push the gold tables to Hugging Face (Week 3), edit `HF_USERNAME` in
+`notebooks/60_push_to_hub.py`, then run it manually -- not run automatically
+by anything else, since it creates real repos on your HF account.
+
+### Rebuilding from scratch
+
+`./rebuild.sh` automates all of the above from a completely empty state: tears
+down and recreates the containers, wipes RustFS's storage and the local
+DuckLake catalog, then reruns the entire pipeline in order (everything above
+except the HF push, which stays manual on purpose). Run it from the project
+root: `chmod +x rebuild.sh && ./rebuild.sh`. Verified working end-to-end.
+
+## Published gold datasets
+
+Both gold tables were pushed back to the Hugging Face Hub via `notebooks/60_push_to_hub.py`:
+
+- https://huggingface.co/datasets/shalyyy/ai-lakehouse-coco
+- https://huggingface.co/datasets/shalyyy/ai-lakehouse-visdrone
+
 ## Structure
 
 ```
 docker-compose.yml   # RustFS + lab containers
+rebuild.sh            # recreates the whole lakehouse from an empty bucket
 .env                  # HF_TOKEN (not committed)
 sql/
   00_attach.sql         # extensions + S3 secret + ATTACH DuckLake
@@ -85,6 +105,7 @@ notebooks/
   11_ingest_visdrone.py   # lands VisDrone images + real detections into raw
   40_fragment_query_demo.py  # COCO crowded-scenes query + selective VisDrone fragment fetch
   50_versioning_demo.py      # time travel, snapshot comparison, rollback demo
+  60_push_to_hub.py          # pushes both gold tables back to Hugging Face
 local-store/          # local Docker host storage (staging area for HF round-trip)
 ```
 
