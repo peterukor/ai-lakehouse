@@ -58,18 +58,33 @@ python3
 
 Or from the DuckDB CLI directly if it's installed.
 
+## Running the pipeline
+
+Run these in order from inside the `lab` container:
+
+```bash
+python3 notebooks/10_ingest_coco.py       # raw: COCO images + annotations
+python3 notebooks/11_ingest_visdrone.py   # raw: VisDrone images + real detections
+python3 -c "import duckdb; con = duckdb.connect(); con.execute(open('sql/00_attach.sql').read()); con.execute(open('sql/20_silver.sql').read())"   # silver
+python3 -c "import duckdb; con = duckdb.connect(); con.execute(open('sql/00_attach.sql').read()); con.execute(open('sql/20_silver.sql').read()); con.execute(open('sql/30_gold.sql').read())"   # gold
+python3 notebooks/40_fragment_query_demo.py   # COCO metadata query + selective fragment fetch
+python3 notebooks/50_versioning_demo.py       # time travel, snapshot comparison, rollback
+```
+
 ## Structure
 
 ```
 docker-compose.yml   # RustFS + lab containers
 .env                  # HF_TOKEN (not committed)
 sql/
-  00_attach.sql       # extensions + S3 secret + ATTACH DuckLake
-  20_silver.sql        # raw -> silver transforms (typed tables, schema evolution demo)
-  30_gold.sql          # (coming next) silver -> gold tables
+  00_attach.sql         # extensions + S3 secret + ATTACH DuckLake
+  20_silver.sql         # raw -> silver transforms (typed tables, schema evolution demo)
+  30_gold.sql           # silver -> gold: ML-ready tables + the VisDrone fragment index
 notebooks/
-  10_ingest_coco.py     # lands COCO images + annotations into raw
-  11_ingest_visdrone.py # lands VisDrone images + real detections into raw
+  10_ingest_coco.py       # lands COCO images + annotations into raw
+  11_ingest_visdrone.py   # lands VisDrone images + real detections into raw
+  40_fragment_query_demo.py  # COCO crowded-scenes query + selective VisDrone fragment fetch
+  50_versioning_demo.py      # time travel, snapshot comparison, rollback demo
 local-store/          # local Docker host storage (staging area for HF round-trip)
 ```
 
@@ -95,3 +110,4 @@ local-store/          # local Docker host storage (staging area for HF round-tri
   fake "clip" ourselves, purely so there's something to build and demo the fragment-index
   pattern on. The detections themselves are 100% real, only the clip boundaries are
   constructed. See `notebooks/11_ingest_visdrone.py` for the exact logic.
+  
