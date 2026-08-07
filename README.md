@@ -1,8 +1,9 @@
 # ai-lakehouse
 
 Small versioned lakehouse: DuckLake (catalog) over RustFS (S3-compatible storage),
-built with DuckDB, populated from COCO (images) and VisDrone-MOT (video), with a
-round-trip to the Hugging Face Hub.
+built with DuckDB, populated from COCO (images) and VisDrone (real detection images,
+grouped into synthetic clips -- see notes below), with a round-trip to the Hugging
+Face Hub.
 
 ## Setup (do this once)
 
@@ -64,19 +65,33 @@ docker-compose.yml   # RustFS + lab containers
 .env                  # HF_TOKEN (not committed)
 sql/
   00_attach.sql       # extensions + S3 secret + ATTACH DuckLake
-  10_raw.sql          # (coming next) land datasets in raw
-  20_silver.sql       # (coming next) raw -> silver transforms
-  30_gold.sql         # (coming next) silver -> gold tables
-notebooks/            # ingestion + transform scripts
+  20_silver.sql        # raw -> silver transforms (typed tables, schema evolution demo)
+  30_gold.sql          # (coming next) silver -> gold tables
+notebooks/
+  10_ingest_coco.py     # lands COCO images + annotations into raw
+  11_ingest_visdrone.py # lands VisDrone images + real detections into raw
 local-store/          # local Docker host storage (staging area for HF round-trip)
 ```
 
 ## Notes / deviations from the assignment brief
 
-- Substituted **VisDrone-MOT** (`Voxel51/visdrone-mot` on Hugging Face) for the
-  VisDrone-VID Task 2 dataset. The original VID task is only distributed via
-  Google Drive / Baidu with no direct download URL, which was impractical given
-  the project timeline. VisDrone-MOT is the same drone footage with per-frame
-  bounding boxes, already grouped by `scene_id` + `frame_number`, which maps
-  directly onto the fragment-index pattern the assignment asks for.
-  
+- **VisDrone-VID (the actual video task) couldn't be used.** It's only distributed via
+  Google Drive/Baidu, no direct download URL. A direct `gdown` attempt at the smallest
+  official split (valset) was blocked by Google itself ("too many users have downloaded
+  this file recently, try again in 24 hours") -- outside our control, not a bug on our end.
+
+- **First substitution attempt failed too.** Tried `Voxel51/visdrone-mot` on Hugging Face
+  (a FiftyOne-packaged version) instead. Its metadata (scene_id, frame_number, detections)
+  turned out to not survive Hugging Face's automatic Parquet conversion -- confirmed by
+  querying the raw Parquet file directly with DuckDB, which showed only an `image` column,
+  nothing else. Not fixable from our side; FiftyOne's nested types aren't supported by
+  that auto-conversion.
+
+- **What we actually used:** `banu4prasad/VisDrone-Dataset` (YOLO format) instead. This
+  gives **real bounding boxes**, parsed from real YOLO label files, for real VisDrone
+  imagery. The one honest simplification: this is the VisDrone-**DET** split (individual
+  detection images), not real video sequences, so `scene_id`/`frame_number` in
+  `raw.visdrone_frames` are **synthetic** -- we group every 10 ingested images into a
+  fake "clip" ourselves, purely so there's something to build and demo the fragment-index
+  pattern on. The detections themselves are 100% real, only the clip boundaries are
+  constructed. See `notebooks/11_ingest_visdrone.py` for the exact logic.
