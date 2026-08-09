@@ -62,7 +62,21 @@ QUALIFY ROW_NUMBER() OVER (
 ) = 1;
 
 
--- VisDrone: same idea, unnest the detections JSON into one row per object
+-- VisDrone: same idea, unnest the detections JSON into one row per object.
+--
+-- NOTE: this schema changed from the original YOLO-based ingestion. Real
+-- VisDrone-MOT data (via fiftyone) gives detections as { label, bounding_box,
+-- track_id, occlusion, visibility } instead of the old YOLO-style
+-- { class_id, class_name, x_center, y_center, width, height }. Two things
+-- are genuinely different, not just renamed:
+--   1. There's no numeric class_id anymore, only the string label.
+--   2. bounding_box is [top_left_x, top_left_y, width, height], all
+--      normalized 0-1 -- NOT center-based like the old x_center/y_center
+--      were. Anything downstream that assumed center coordinates would
+--      need to account for this; nothing currently does.
+-- track_id is new: it's a real identity that follows the same object
+-- across frames within a scene (VisDrone-MOT is tracking data), which
+-- the old static YOLO detections never had.
 CREATE OR REPLACE TABLE silver.visdrone_detections AS
 SELECT DISTINCT
     r.image_uri,
@@ -70,17 +84,19 @@ SELECT DISTINCT
     r.frame_number,
     r.width  AS image_width,
     r.height AS image_height,
-    d.class_id,
-    d.class_name,
-    d.x_center,
-    d.y_center,
-    d.width  AS box_width,
-    d.height AS box_height
+    d.label AS class_name,
+    d.track_id,
+    d.bounding_box[1] AS bbox_x,       -- top-left x, normalized 0-1
+    d.bounding_box[2] AS bbox_y,       -- top-left y, normalized 0-1
+    d.bounding_box[3] AS bbox_width,   -- normalized 0-1
+    d.bounding_box[4] AS bbox_height,  -- normalized 0-1
+    d.occlusion,
+    d.visibility
 FROM raw.visdrone_frames r,
 UNNEST(
     detections_json::JSON::STRUCT(
-        class_id INTEGER, class_name VARCHAR,
-        x_center DOUBLE, y_center DOUBLE, width DOUBLE, height DOUBLE
+        label VARCHAR, bounding_box DOUBLE[], track_id INTEGER,
+        occlusion INTEGER, visibility INTEGER
     )[]
 ) AS t(d)
 WHERE r.n_detections > 0;   -- skip frames with zero detections
