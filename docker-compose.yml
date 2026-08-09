@@ -13,22 +13,43 @@ services:
       - rustfs-data:/data
       - rustfs-logs:/logs
 
+  # FiftyOne needs a real MongoDB to store its metadata. fiftyone-db (the
+  # bundled mongod FiftyOne tries to auto-launch) only ships prebuilt
+  # binaries for a handful of platforms and does NOT include linux/aarch64
+  # -- which is exactly what this container is on under Docker Desktop on
+  # Apple Silicon. The official `mongo` image genuinely does support
+  # arm64v8 though, so running it as its own service and pointing FiftyOne
+  # at it (via FIFTYONE_DATABASE_URI on the lab service) sidesteps the
+  # missing-binary problem entirely.
+  mongo:
+    image: mongo:7
+    mem_limit: 512m
+    volumes:
+      - mongo-data:/data/db
+
   lab:
     image: python:3.12-slim
     mem_limit: 2g
     working_dir: /workspace
-    depends_on: [rustfs]
+    depends_on: [rustfs, mongo]
     volumes:
       - ./:/workspace
       - ./local-store:/data/local
+      # persists fiftyone's downloaded dataset cache across rebuild.sh runs --
+      # without this, every rebuild re-downloads ~80MB from Hugging Face from
+      # scratch (wasteful on a laptop connection, and re-risks hitting the
+      # same rate limit every time)
+      - fiftyone-cache:/root/fiftyone
     environment:
       AWS_ACCESS_KEY_ID: rustfsadmin
       AWS_SECRET_ACCESS_KEY: rustfsadmin
       S3_ENDPOINT: "http://rustfs:9000"
       HF_TOKEN: ${HF_TOKEN:-}
+      FIFTYONE_DATABASE_URI: "mongodb://mongo:27017"
     command: sleep infinity
 
 volumes:
   rustfs-data:
   rustfs-logs:
-  
+  mongo-data:
+  fiftyone-cache:

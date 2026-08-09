@@ -8,3 +8,4 @@ pyarrow>=16.0.0
 opencv-python-headless>=4.9.0
 papermill>=2.6.0
 ipykernel>=6.29.0
+fiftyone>=1.20.0
