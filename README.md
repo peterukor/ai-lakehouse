@@ -1,9 +1,9 @@
 # ai-lakehouse
 
 Small versioned lakehouse: DuckLake (catalog) over RustFS (S3-compatible storage),
-built with DuckDB, populated from COCO (images) and VisDrone (real detection images,
-grouped into synthetic clips -- see notes below), with a round-trip to the Hugging
-Face Hub.
+built with DuckDB, populated from COCO (images) and VisDrone-MOT (real video
+sequences -- real scene/frame ordering and real cross-frame object tracking, see
+notes below), with a round-trip to the Hugging Face Hub.
 
 ## Setup (do this once)
 
@@ -13,6 +13,10 @@ cp .env.example .env
 
 docker compose up -d
 ```
+
+This brings up three containers: `rustfs` (S3-compatible object storage),
+`mongo` (required by the `fiftyone` library -- see notes below), and `lab`
+(where everything actually runs).
 
 Create the `lakehouse` bucket:
 - open http://localhost:9001 in a browser (user/pass: rustfsadmin / rustfsadmin)
@@ -27,10 +31,10 @@ docker compose exec lab bash
 pip install -r requirements.txt
 ```
 
-`requirements.txt` includes `papermill` and `ipykernel` alongside the usual
-data/S3 libraries -- the pipeline steps are Jupyter notebooks (`.ipynb`), and
-`papermill` is what actually executes them from the command line, cell by cell,
-writing the outputs back into the notebook file.
+Fair warning: this install is noticeably heavier than it looks, since `fiftyone`
+(needed to correctly read the real VisDrone-MOT data -- see notes below) pulls in
+matplotlib, scikit-learn, scikit-image, and a handful of other sizeable packages
+as dependencies. Budget a few extra minutes on the first install.
 
 ### Note on storage: named volumes, not bind mounts
 
@@ -50,6 +54,12 @@ RustFS web console (http://localhost:9001) to browse the bucket, or DuckDB/DuckL
 queries to read the data -- which is the intended workflow anyway. `local-store/`
 is still a normal bind mount and works fine for staging files you do want visible
 in Finder (e.g. exporting a table before pushing it to Hugging Face).
+
+There's also a `fiftyone-cache` named volume, mounted at `/root/fiftyone` in the
+`lab` container. Without it, `./rebuild.sh` would re-download the VisDrone-MOT
+dataset from Hugging Face from scratch on every single rebuild, since `rebuild.sh`
+destroys and recreates the `lab` container each time. The named volume lets that
+download persist across rebuilds instead.
 
 ## Attach the lakehouse
 
@@ -97,7 +107,7 @@ down and recreates the containers, wipes RustFS's storage and the local
 DuckLake catalog, then reruns the entire pipeline in order via `papermill`
 (everything above except the HF push, which stays manual on purpose). Run it
 from the project root: `chmod +x rebuild.sh && ./rebuild.sh`. Verified working
-end-to-end.
+end-to-end, including a real detection count on `raw.visdrone_frames` (not zero).
 
 ## Published gold datasets
 
@@ -109,7 +119,7 @@ Both gold tables were pushed back to the Hugging Face Hub via `notebooks/60_push
 ## Structure
 
 ```
-docker-compose.yml   # RustFS + lab containers
+docker-compose.yml   # RustFS + Mongo + lab containers
 rebuild.sh            # recreates the whole lakehouse from an empty bucket, via papermill
 .env                  # HF_TOKEN (not committed)
 sql/
@@ -119,7 +129,7 @@ sql/
 notebooks/
   10_ingest_coco.ipynb       # lands COCO images + annotations into raw
   61_ingest_via_local_store.ipynb  # incremental: 20 more COCO images, staged through local-store/ first
-  11_ingest_visdrone.ipynb   # lands VisDrone images + real detections into raw
+  11_ingest_visdrone.ipynb   # lands real VisDrone-MOT video frames + real detections into raw
   40_fragment_query_demo.ipynb  # COCO crowded-scenes query + selective VisDrone fragment fetch
   50_versioning_demo.ipynb      # time travel, snapshot comparison, rollback demo
   60_push_to_hub.ipynb          # pushes both gold tables back to Hugging Face
@@ -128,23 +138,54 @@ local-store/          # local Docker host storage -- 61_ingest_via_local_store.i
 
 ## Notes / deviations from the assignment brief
 
-- **VisDrone-VID (the actual video task) couldn't be used.** It's only distributed via
-  Google Drive/Baidu, no direct download URL. A direct `gdown` attempt at the smallest
-  official split (valset) was blocked by Google itself ("too many users have downloaded
-  this file recently, try again in 24 hours") -- outside our control, not a bug on our end.
+- **VisDrone-VID itself (the exact split named in the brief) couldn't be used.**
+  It's only distributed via Google Drive/Baidu, no direct download URL. A direct
+  `gdown` attempt at the smallest official split (valset) was blocked by Google
+  itself ("too many users have downloaded this file recently, try again in 24
+  hours") -- outside our control, not a bug on our end.
 
-- **First substitution attempt failed too.** Tried `Voxel51/visdrone-mot` on Hugging Face
-  (a FiftyOne-packaged version) instead. Its metadata (scene_id, frame_number, detections)
-  turned out to not survive Hugging Face's automatic Parquet conversion -- confirmed by
-  querying the raw Parquet file directly with DuckDB, which showed only an `image` column,
-  nothing else. Not fixable from our side; FiftyOne's nested types aren't supported by
-  that auto-conversion.
+- **What we ended up using instead: VisDrone-MOT** (`Voxel51/visdrone-mot` on
+  Hugging Face) -- the multi-object-tracking track of the same VisDrone
+  benchmark, built from much of the same underlying drone footage as VID. This
+  is a real video dataset: real named sequences (e.g. `uav0000086_00000_v`),
+  real sequential `frame_number`s within each sequence, and real per-object
+  detections that include a genuine cross-frame **tracking ID** (VisDrone-VID's
+  own annotation format includes an equivalent tracking field, so MOT data is
+  a reasonable stand-in, not a stretch). One honest caveat: this is the MOT
+  track, not the literally-named VID track -- worth stating plainly rather than
+  implying it's the exact same split.
 
-- **What we actually used:** `banu4prasad/VisDrone-Dataset` (YOLO format) instead. This
-  gives **real bounding boxes**, parsed from real YOLO label files, for real VisDrone
-  imagery. The one honest simplification: this is the VisDrone-**DET** split (individual
-  detection images), not real video sequences, so `scene_id`/`frame_number` in
-  `raw.visdrone_frames` are **synthetic** -- we group every 10 ingested images into a
-  fake "clip" ourselves, purely so there's something to build and demo the fragment-index
-  pattern on. The detections themselves are 100% real, only the clip boundaries are
-  constructed. See `notebooks/11_ingest_visdrone.ipynb` for the exact logic.
+- **Getting to that real data took several wrong turns, worth documenting
+  honestly:**
+  - A first attempt at this exact dataset failed when read through Hugging
+    Face's **auto-converted Parquet mirror** -- that conversion silently drops
+    FiftyOne's nested `scene_id`/`frame_number`/`detections` fields down to a
+    bare `image` column. Confirmed by querying the raw Parquet directly with
+    DuckDB and seeing nothing else.
+  - The actual fix: load the dataset through the real **`fiftyone`** Python
+    library instead (`fiftyone.utils.huggingface.load_from_hub`), which reads
+    the dataset in its native format with every field intact.
+  - `fiftyone` requires a real MongoDB to store its metadata. Its bundled
+    auto-installer (`fiftyone-db`) doesn't ship a `mongod` binary for
+    `linux/aarch64` -- exactly the platform this container runs on under
+    Docker Desktop on Apple Silicon. Fixed by running a real `mongo` container
+    (`docker-compose.yml`) and pointing `fiftyone` at it via
+    `FIFTYONE_DATABASE_URI`.
+  - Downloading the full dataset with no limit (~2,847 images across all 7
+    real scenes) triggered a `429 Too Many Requests` from Hugging Face's Xet
+    storage backend. Fixed by bounding the download (`max_samples`) and
+    retrying with backoff on failure, and by picking whichever real scenes
+    actually land inside that bounded download rather than hardcoding scene
+    names that might get cut off.
+  - `sample.detections`' actual shape varies -- sometimes a `Detections`
+    wrapper object, sometimes a bare list of `Detection` objects directly. An
+    early version of the ingestion code mishandled the bare-list case and
+    silently discarded every real detection (`raw.visdrone_frames` landed with
+    0 total detections despite real data existing). Fixed by handling both
+    shapes explicitly; confirmed fixed by rerunning and seeing a real,
+    non-zero detection count and a populated fragment index.
+
+- `notebooks/11_ingest_visdrone.ipynb` pulls 2 real scenes, 30 contiguous real
+  frames each (60 frames total, matching the original scale of this project),
+  selected by real `frame_number` ordering rather than an arbitrary slice --
+  see the notebook for the exact logic.
